@@ -1,0 +1,2 @@
+class Fetch:
+    pass

@@ -1,0 +1,9 @@
+*.swp
+*.swa
+*.swb
+*.pyc
+*.json
+*.log
+*.html
+__pycache__
+.idea
