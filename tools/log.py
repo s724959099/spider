@@ -236,7 +236,8 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
                 'formatter': 'crawler_status',
                 'class': 'logging.handlers.RotatingFileHandler',
                 'maxBytes': 0,
-                'backupCount': 0
+                'backupCount': 0,
+                "encoding": "utf8"
             }
         },
         'loggers': {
@@ -268,7 +269,8 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
             'formatter': 'mono_color',
             'class': 'logging.handlers.RotatingFileHandler',
             'maxBytes': 10e9,
-            'backupCount': 1
+            'backupCount': 1,
+            "encoding": "utf8"
         }
 
     # add other logger to same file

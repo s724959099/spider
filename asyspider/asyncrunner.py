@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import inspect
+import traceback
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +46,8 @@ class AsyncRunner:
                 logger.exception('runner error:')
                 self.__tasks_que.task_done()
             finally:
-                pass
                 # todo queue remove from runing_quue
+                pass
 
     def run(self, callback=None):
         """

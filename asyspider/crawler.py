@@ -8,8 +8,10 @@ from .asyncrunner import AsyncRunner
 from .fetcher import Fetcher
 from .agent import get_agent
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+now = lambda: time.time()
 
 
 @attr.s
@@ -68,12 +70,15 @@ class Crawler:
     sleep_time = 1
     update_cookies = True
     agent_type = 'desktop'
+    fail_try_num = 3
+    try_fail_time = 60 * 5
 
     def __init__(self):
         self.crawled_urls = set()
         self.agent = get_agent(self.agent_type)
 
         self.__fails = deque()
+        self.__fails_count = defaultdict(int)
         self.__runner = AsyncRunner(self)
         self.__fetcher = Fetcher(self)
         self.__total_urls = 0
@@ -108,9 +113,10 @@ class Crawler:
         if not crawl_arg.url.startswith('http'):
             return None
         crawl_arg.other_kwargs = other_kwargs
+        if crawl_arg.task_id is None:
+            self.__gen_task_id(crawl_arg)
         if self.check_crawled_urls:
-            if crawl_arg.task_id is None:
-                self.__gen_task_id(crawl_arg)
+
             if crawl_arg.task_id in self.crawled_urls:
                 logger.debug("repeated url: %s %s %s", crawl_arg.url, crawl_arg.params, crawl_arg.data)
                 return None
@@ -129,31 +135,55 @@ class Crawler:
         retries = self.retries
         status = None
         ret = None
-        async with self.__fetcher.fetch(crawl_arg, proxy) as resp:
-            if crawl_arg.read:
-                ret = await resp.read()
-            resp.data = ret
-            return resp
+
+        try:
+            async with self.__fetcher.fetch(crawl_arg, proxy) as resp:
+                if crawl_arg.read and ret:
+                    ret = await resp.read()
+                resp.data = ret
+                return resp
+        except Exception as e:
+            logger.exception('__crawl error:')
+            return None
 
     def __try_fails(self):
-        pass
+        if not len(self.__fails):
+            return
+        now_time = now()
+        crawl_arg = self.__fails[0]
+
+        if self.__fails_count[crawl_arg.task_id] <= self.fail_try_num and \
+                now_time - crawl_arg.now >= self.try_fail_time:
+            self.__runner.add_task(crawl_arg)
+            self.__fails.popleft()
 
     def first_try_fails(self):
-        # todo fake
         while len(self.__fails):
             crawl_arg = self.__fails.popleft()
             self.__runner.add_task(crawl_arg)
 
     def still_fails_process(self):
+        # todo not impl
         pass
         # record still failed
         for i, d in enumerate(self.__fails):
             fail_log.info(d)
 
+    def to_fails(self, crawl_arg):
+        logger.warning("fails: %s %s", crawl_arg.url, crawl_arg.params)
+        if crawl_arg in self.__fails:
+            self.__fails.remove(crawl_arg)
+        crawl_arg.now = now()
+        self.__fails.append(crawl_arg)
+        self.__fails_count[crawl_arg.task_id] += 1
+
     async def work(self, arg):
         self.__try_fails()
         if isinstance(arg, CrawlArg):
             ret = await self.__crawl(arg)
+            if not ret:
+                self.to_fails(arg)
+            ret.info = arg
             arg.callback(ret, **arg.kwargs) if not inspect.iscoroutinefunction(arg.callback) \
                 else await arg.callback(ret, **arg.kwargs)
 
