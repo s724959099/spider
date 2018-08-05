@@ -12,7 +12,7 @@ try:
 except ImportError:
     curses = None
 
-logdir = os.path.join(os.environ['HOME'], 'var/log')
+logdir = os.path.join(os.path.dirname(__file__), '../logs')
 uid = str(uuid.uuid4())[0:4]
 now_str = datetime.datetime.now().strftime('%Y%m%d.%H%M%S')
 logger = logging.getLogger()
@@ -263,13 +263,13 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
     }
     if file_name:
         base_config['handlers']['rotate_file_handler'] = {
-                'filename': file_name,
-                'level': level_str,
-                'formatter': 'mono_color',
-                'class': 'logging.handlers.RotatingFileHandler',
-                'maxBytes': 10e9,
-                'backupCount': 1
-            }
+            'filename': file_name,
+            'level': level_str,
+            'formatter': 'mono_color',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'maxBytes': 10e9,
+            'backupCount': 1
+        }
 
     # add other logger to same file
     for lgr_key in loggers:
@@ -296,7 +296,7 @@ def initlog(logfile=None, logdir=None, level=logging.INFO,
     參考dictConfig config={...} 可以更改default init方式
     """
     if not logdir:
-        logdir = os.path.join(os.environ['HOME'], 'var/log')
+        logdir = logdir = os.path.join(os.getcwd(), 'logs')
     if not os.path.exists(logdir):
         os.makedirs(logdir)
     dictConfig(name=logfile, level=level, debug=debug,
@@ -331,7 +331,7 @@ if __name__ == '__main__':
     [I ee39 180621 08:09:12 log:132] sub info
     [D ee39 180621 08:09:12 log:133] sub debug
     """
-    initlog('kk', level=logging.INFO,config=dict(
+    initlog('kk', level=logging.INFO, config=dict(
         loggers={
             'test': {
                 'level': logging.WARNING,

@@ -168,8 +168,8 @@ class AioBaseCrawler(BaseCrawler):
     __fails = deque()
     # 計算fails 次數
     __fails_count = defaultdict(int)
-    _loop = asyncio.get_event_loop()
-    _tasks_que = asyncio.Queue(loop=_loop)
+    __loop = asyncio.get_event_loop()
+    __tasks_que = asyncio.Queue(loop=__loop)
     __total_urls = 0
     __total_crawled = 0
     AsyncRequesturl = aRequestMixin
@@ -271,7 +271,7 @@ class AioBaseCrawler(BaseCrawler):
         """
         ret = self.__crawl_checking(*args, **kwargs)
         if ret:
-            self._tasks_que.put_nowait(ret)
+            self.__tasks_que.put_nowait(ret)
 
     async def async_crawl(self, *args, **kwargs):
         """
@@ -294,7 +294,7 @@ class AioBaseCrawler(BaseCrawler):
 
         if self.__fails_count[crawl_arg.task_id] <= self.fail_try_num and \
                 now_time - crawl_arg.now >= self.try_fail_time:
-            self._tasks_que.put_nowait(crawl_arg)
+            self.__tasks_que.put_nowait(crawl_arg)
             self.__fails.popleft()
 
     def __copy__crawl_args(self, r, crawl_arg):
@@ -426,15 +426,15 @@ url: %s"""
     async def workers(self):
         while True:
             try:
-                crawl_arg = await self._tasks_que.get()
+                crawl_arg = await self.__tasks_que.get()
                 self.__try_fails()
                 await self.__crawl(crawl_arg)
-                self._tasks_que.task_done()
+                self.__tasks_que.task_done()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.exception('worker')
-                self._tasks_que.task_done()
+                self.__tasks_que.task_done()
             finally:
                 pass
                 # todo queue remove from runing_quue
@@ -445,17 +445,17 @@ url: %s"""
         else:
             self.on_start()
         workers = [
-            asyncio.Task(self.workers(), loop=self._loop)
+            asyncio.Task(self.workers(), loop=self.__loop)
             for _ in range(self.max_tasks)
         ]
         # 執行 on_start新增的queue
-        await self._tasks_que.join()
+        await self.__tasks_que.join()
 
         # 結束後 在把所有fails丟進queue
         while len(self.__fails):
             crawl_arg = self.__fails.popleft()
-            self._tasks_que.put_nowait(crawl_arg)
-        await self._tasks_que.join()
+            self.__tasks_que.put_nowait(crawl_arg)
+        await self.__tasks_que.join()
         # record still failed
         for i, d in enumerate(self.__fails):
             fail_log.info(d)
@@ -471,7 +471,7 @@ url: %s"""
         start_at = datetime.datetime.now()
         logger.info('time: start:%s', start_at)
         try:
-            self._loop.run_until_complete(self.work())
+            self.__loop.run_until_complete(self.work())
         except KeyboardInterrupt:
             for task in asyncio.Task.all_tasks():
                 task.cancel()
@@ -497,11 +497,11 @@ url: %s"""
 
     async def single_work(self):
         workers = [
-            asyncio.Task(self.workers(), loop=self._loop)
+            asyncio.Task(self.workers(), loop=self.__loop)
             for _ in range(self.max_tasks)
         ]
 
-        await self._tasks_que.join()
+        await self.__tasks_que.join()
         for worker in workers:
             worker.cancel()
 
@@ -514,7 +514,7 @@ url: %s"""
         start_at = datetime.datetime.now()
         logger.info('time: start:%s', start_at)
         try:
-            self._loop.run_until_complete(self.single_work())
+            self.__loop.run_until_complete(self.single_work())
         except KeyboardInterrupt:
             for task in asyncio.Task.all_tasks():
                 task.cancel()

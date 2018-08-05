@@ -1,6 +1,7 @@
 import random
 import os
 
+
 def random_line(afile):
     line = next(afile)
     for num, aline in enumerate(afile):
@@ -8,7 +9,8 @@ def random_line(afile):
         line = aline
     return line.strip()
 
-def reqagent(platform='desktop'):
+
+def get_agent(platform='desktop'):
     platform = platform.lower()
     if platform == 'desktop':
         filename = 'agentlist_desktop.txt'
@@ -17,11 +19,5 @@ def reqagent(platform='desktop'):
     else:
         filename = 'agentlist.txt'
 
-    try:
-        # import module with search sys.path
-        with open(os.path.join(os.path.dirname(__file__), filename)) as f:
-            return random_line(f)
-    except:
-        # import module with creating a symbolic link
-        with open(os.path.join(os.path.dirname(__file__), '..', '..', filename)) as f:
-            return random_line(f)
+    with open(os.path.join(os.path.dirname(__file__), filename)) as f:
+        return random_line(f)
