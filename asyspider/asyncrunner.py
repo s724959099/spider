@@ -24,13 +24,11 @@ class AsyncRunner:
         """
         run execute method
         """
-        await self.crawler.on_start() \
-            if inspect.iscoroutinefunction(self.crawler.on_start) \
-            else self.crawler.on_start()
         workers = [
             asyncio.Task(self.workers(), loop=self.__loop)
             for _ in range(self.crawler.max_tasks)
         ]
+        self.crawler.add_task(callback=self.crawler.on_start)
         # 執行 on_start新增的queue
         await self.__tasks_que.join()
 
