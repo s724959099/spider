@@ -147,6 +147,7 @@ class Fetcher:
             headers['user-agent'] = self.crawler.agent
         if referer and 'Referer' not in headers:
             headers['Referer'] = referer
+        crawl_arg.real_headers = headers
         return headers
 
     @try_wrapper
@@ -172,8 +173,8 @@ class Fetcher:
     @asynccontextmanager
     async def fetch(self, crawl_arg, proxy):
         async with self.call_fetch(crawl_arg, proxy) as resp:
-            if not (resp.status == 200 or resp.reason == 'OK'):
-                raise Exception('status not 200: %s', resp.status)
+            if not (resp.status in [200, 201] or resp.reason == 'OK'):
+                raise Exception('status not 200: %s %s' % (resp.status, crawl_arg.url))
             __cookie = resp.cookies
             if __cookie:
                 self.cookie.update(__cookie)

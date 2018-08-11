@@ -1,4 +1,5 @@
 from collections import defaultdict, deque
+from async_generator import asynccontextmanager
 import hashlib
 import inspect
 import re
@@ -130,6 +131,17 @@ class Crawler:
         if crawl_arg:
             self.__runner.add_task(crawl_arg)
 
+    def add_task(self, **kwargs):
+        self.__runner.add_task(kwargs)
+
+    @asynccontextmanager
+    async def fetch(self, *args, **kwargs):
+        crawl_arg = self.__crawl_checking(*args, **kwargs)
+        proxy = None
+        async with self.__fetcher.call_fetch(crawl_arg, proxy) as resp:
+            resp.data = crawl_arg
+            yield resp
+
     async def __crawl(self, crawl_arg):
         proxy = None
         retries = self.retries
@@ -138,7 +150,7 @@ class Crawler:
 
         try:
             async with self.__fetcher.fetch(crawl_arg, proxy) as resp:
-                if crawl_arg.read and ret:
+                if crawl_arg.read:
                     ret = await resp.read()
                 resp.data = ret
                 return resp
@@ -182,16 +194,65 @@ class Crawler:
         if isinstance(arg, CrawlArg):
             ret = await self.__crawl(arg)
             if not ret:
+                logger.warning('crawl None url: %s', arg.url)
                 self.to_fails(arg)
+                return
             ret.info = arg
             arg.callback(ret, **arg.kwargs) if not inspect.iscoroutinefunction(arg.callback) \
                 else await arg.callback(ret, **arg.kwargs)
+        else:
+            callback = arg.get('callback')
+            if callback:
+                callback(**arg.get('kwargs', {})) if not inspect.iscoroutinefunction(callback) \
+                    else await callback(**arg.get('kwargs', {}))
 
     def run(self, callback=None):
         """
         finnaly 最後執行的function
         """
         self.__runner.run(callback)
+
+    def download(self, url, file_name, headers=None, download_part=20):
+        headers = headers or self.headers
+        self.crawl(url, callback=self.get_download_content, headers=headers,
+                   read=False,
+                   kwargs=(
+                       dict(file_name=file_name,
+                            headers=headers,
+                            download_part=download_part)))
+
+    def get_download_content(self, r, file_name, headers=None, download_part=20):
+        file_size = int(r.headers['Content-Length'])
+        logger.info('file: %s size: %s', file_name, file_size)
+        fp = open(file_name, "wb")
+        fp.truncate(file_size)
+        fp.close()
+
+        part = file_size // download_part
+        get_headers = headers or self.headers
+        for i in range(download_part):
+            start = part * i
+            if i == download_part - 1:
+                end = file_size
+            else:
+                end = start + part
+
+            task_headers = get_headers + """
+            Range: bytes={}-{}
+            """.format(start, end)
+            self.add_task(callback=self.part_download, kwargs=dict(
+                start=start, end=end, file_name=file_name,
+                url=r.info.url, headers=task_headers,
+            ))
+
+    async def part_download(self, url, headers, start, end, file_name):
+        logger.info('read: %s start: %s end:%s', file_name, start, end)
+        async with self.fetch(url, headers=headers)as r:
+            with open(file_name, "r+b") as fp:
+                fp.seek(start)
+                async for chunk in r.content.iter_chunked(1024000):
+                    if chunk:
+                        fp.write(chunk)
 
 
 if __name__ == '__main__':

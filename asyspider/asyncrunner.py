@@ -3,6 +3,13 @@ import logging
 import inspect
 import traceback
 
+try:
+    import uvloop
+
+    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+except ImportError:
+    pass
+
 logger = logging.getLogger(__name__)
 
 
@@ -14,6 +21,9 @@ class AsyncRunner:
         self.crawler = crawler
 
     async def execute(self):
+        """
+        run execute method
+        """
         await self.crawler.on_start() \
             if inspect.iscoroutinefunction(self.crawler.on_start) \
             else self.crawler.on_start()
