@@ -4,6 +4,7 @@ import asyncio
 import async_timeout
 import re
 from async_generator import asynccontextmanager
+from .proxy import Proxy
 
 logger = logging.getLogger(__name__)
 
@@ -91,33 +92,31 @@ def headers_raw_to_dict(headers_raw):
     return result_dict
 
 
-def try_wrapper(fn):
-    @asynccontextmanager
-    async def wrapper(self, crawl_arg, proxy):
-        retries = self.crawler.retries
-        sleep_time = self.crawler.sleep_time
-        while retries:
-            retries -= 1
-            try:
-                async with fn(self, crawl_arg, proxy) as resp:
-                    yield resp
-                    break
-            except aiohttp.ClientError as e:
-                logger.exception('ClientError')
-            except asyncio.TimeoutError as e:
-                logger.exception('TimoutError')
-                await asyncio.sleep(sleep_time)
-            except Exception as e:
-                logger.exception('Exception')
-                await asyncio.sleep(sleep_time)
-
-    return wrapper
+# def try_wrapper(fn):
+#     @asynccontextmanager
+#     async def wrapper(self, crawl_arg, proxy):
+#         retries = self.crawler.retries
+#         sleep_time = self.crawler.sleep_time
+#         while retries:
+#             retries -= 1
+#             try:
+#                 async with fn(self, crawl_arg, proxy) as resp:
+#                     yield resp
+#                     break
+#             except Exception as e:
+#                 logger.error('try_wrapper error: %s', str(e))
+#                 await asyncio.sleep(sleep_time)
+#         if not retries:
+#             yield None
+#
+#     return wrapper
 
 
 class Fetcher:
     def __init__(self, crawler):
         self.crawler = crawler
         self.cookie = Cookie()
+        self.__proxy = Proxy() if crawler.proxy else None
 
     async def reset(self):
         self.cookie.reset()
@@ -150,32 +149,44 @@ class Fetcher:
         crawl_arg.real_headers = headers
         return headers
 
-    @try_wrapper
     @asynccontextmanager
-    async def call_fetch(self, crawl_arg, proxy):
-        method_args = dict(
-            url=crawl_arg.url,
-            headers=self.handle_headers(crawl_arg),
-            proxy=proxy,
-            verify_ssl=False,
-            allow_redirects=self.crawler.allow_redirects,
-            params=crawl_arg.params,
-            data=crawl_arg.data,
-        )
-        timeout = self.crawler.timeout
-        async with async_timeout.timeout(
-                timeout):
-            async with aiohttp.ClientSession() as session:
-                fetch_method = getattr(session, crawl_arg.method)
-                async with fetch_method(**method_args) as resp:
-                    yield resp
-
-    @asynccontextmanager
-    async def fetch(self, crawl_arg, proxy):
-        async with self.call_fetch(crawl_arg, proxy) as resp:
-            if not (resp.status in [200, 201] or resp.reason == 'OK'):
-                raise Exception('status not 200: %s %s' % (resp.status, crawl_arg.url))
-            __cookie = resp.cookies
-            if __cookie:
-                self.cookie.update(__cookie)
-            yield resp
+    async def fetch(self, crawl_arg):
+        retries = self.crawler.retries
+        sleep_time = self.crawler.sleep_time
+        while retries:
+            retries -= 1
+            proxy_instance = self.crawler.proxy_instance
+            proxy = proxy_instance.get_proxy() if proxy_instance else None
+            proxy = '217.61.125.74:8080'
+            if proxy:
+                proxy = "http://{}".format(proxy)
+            method_args = dict(
+                url=crawl_arg.url,
+                headers=self.handle_headers(crawl_arg),
+                proxy=proxy,
+                verify_ssl=False,
+                allow_redirects=self.crawler.allow_redirects,
+                params=crawl_arg.params,
+                data=crawl_arg.data,
+                timeout=self.crawler.timeout
+            )
+            try:
+                async with aiohttp.ClientSession() as session:
+                    fetch_method = getattr(session, crawl_arg.method)
+                    async with fetch_method(**method_args) as resp:
+                        if not resp:
+                            yield
+                        else:
+                            if not (resp.status in [200, 201] or resp.reason == 'OK'):
+                                logger.error('status not 200: %s %s' % (resp.status, crawl_arg.url))
+                            __cookie = resp.cookies
+                            if __cookie:
+                                self.cookie.update(__cookie)
+                            yield resp
+            except Exception as e:
+                logger.error('try_wrapper error: %s', str(e))
+                if proxy_instance:
+                    proxy_instance.dead_proxy(proxy)
+                await asyncio.sleep(sleep_time)
+        if not retries:
+            yield None

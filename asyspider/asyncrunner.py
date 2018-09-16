@@ -76,6 +76,10 @@ class AsyncRunner:
         except Exception as e:
             logger.exception('run done error: %s', str(e))
         finally:
+            for task in asyncio.Task.all_tasks():
+                task.cancel()
+            if self.crawler.proxy_instance:
+                self.crawler.proxy_instance.store()
             self.crawler.on_done()
             # todo 結束時間
             # end_at = datetime.datetime.now()

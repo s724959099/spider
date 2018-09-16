@@ -247,19 +247,6 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
                 'level': level_str,
                 'propagate': True
             },
-            'requests': {
-                'level': logging.WARNING,
-                'propagate': True
-            },
-            'elasticsearch': {
-                'level': logging.WARNING,
-                'propagate': True
-            },
-            'crawler_status': {
-                'handlers': ['crawler_status_handler'],
-                'level': logging.INFO,
-                'propagate': False
-            },
         }
     }
     if file_name:

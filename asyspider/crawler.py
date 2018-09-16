@@ -10,6 +10,7 @@ from .fetcher import Fetcher
 from .agent import get_agent
 import logging
 import time
+from .proxy import Proxy
 
 logger = logging.getLogger(__name__)
 now = lambda: time.time()
@@ -63,9 +64,9 @@ CrawlArg_KEY = CrawlArg.attrs()
 
 class Crawler:
     check_crawled_urls = True
+    proxy = True
     max_tasks = 1
-    headers = None
-    retries = 3
+    retries = 10
     allow_redirects = True
     timeout = 10
     sleep_time = 1
@@ -73,10 +74,19 @@ class Crawler:
     agent_type = 'desktop'
     fail_try_num = 3
     try_fail_time = 60 * 5
+    headers = """
+    accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8
+    accept-encoding: gzip, deflate, br
+    accept-language: zh-TW,zh;q=0.9,en;q=0.8,zh-CN;q=0.7,en-US;q=0.6
+    cache-control: no-cache
+    pragma: no-cache
+    upgrade-insecure-requests: 1
+    """
 
     def __init__(self):
         self.crawled_urls = set()
         self.agent = get_agent(self.agent_type)
+        self.proxy_instance = Proxy() if self.proxy else None
 
         self.__fails = deque()
         self.__fails_count = defaultdict(int)
@@ -137,23 +147,24 @@ class Crawler:
     @asynccontextmanager
     async def fetch(self, *args, **kwargs):
         crawl_arg = self.__crawl_checking(*args, **kwargs)
-        proxy = None
-        async with self.__fetcher.call_fetch(crawl_arg, proxy) as resp:
+        async with self.__fetcher.call_fetch(crawl_arg) as resp:
             resp.data = crawl_arg
             yield resp
 
     async def __crawl(self, crawl_arg):
-        proxy = None
         retries = self.retries
         status = None
         ret = None
 
         try:
-            async with self.__fetcher.fetch(crawl_arg, proxy) as resp:
-                if crawl_arg.read:
-                    ret = await resp.read()
-                resp.data = ret
-                return resp
+            async with self.__fetcher.fetch(crawl_arg) as resp:
+                if not resp:
+                    pass
+                else:
+                    if crawl_arg.read:
+                        ret = await resp.read()
+                    resp.data = ret
+                    return resp
         except Exception as e:
             logger.exception('__crawl error:')
             return None
@@ -178,8 +189,8 @@ class Crawler:
         # todo not impl
         pass
         # record still failed
-        for i, d in enumerate(self.__fails):
-            fail_log.info(d)
+        # for i, d in enumerate(self.__fails):
+        #     fail_log.info(d)
 
     def to_fails(self, crawl_arg):
         logger.warning("fails: %s %s", crawl_arg.url, crawl_arg.params)
