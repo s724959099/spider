@@ -10,7 +10,10 @@ from .fetcher import Fetcher
 from .agent import get_agent
 import logging
 import time
-from .proxy import Proxy
+from .proxyhandler import ProxyHandler
+import aiohttp
+import asyncio
+from pprint import pformat
 
 logger = logging.getLogger(__name__)
 now = lambda: time.time()
@@ -48,6 +51,7 @@ class BaseArg:
 class CrawlArg(BaseArg):
     url = attr.ib()
     params = attr.ib(default=None)
+    proxy = attr.ib(default=None)
     data = attr.ib(default=None)
     method = attr.ib(default='get')
     callback = attr.ib(default=None)
@@ -66,14 +70,15 @@ class Crawler:
     check_crawled_urls = True
     proxy = True
     max_tasks = 1
-    retries = 10
-    allow_redirects = True
     timeout = 10
+    retries = 10
     sleep_time = 1
     update_cookies = True
     agent_type = 'desktop'
+    allow_redirects = True
     fail_try_num = 3
     try_fail_time = 60 * 5
+    proxy_handler = ProxyHandler() if proxy else None
     headers = """
     accept: text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8
     accept-encoding: gzip, deflate, br
@@ -86,7 +91,6 @@ class Crawler:
     def __init__(self):
         self.crawled_urls = set()
         self.agent = get_agent(self.agent_type)
-        self.proxy_instance = Proxy() if self.proxy else None
 
         self.__fails = deque()
         self.__fails_count = defaultdict(int)
@@ -147,27 +151,41 @@ class Crawler:
     @asynccontextmanager
     async def fetch(self, *args, **kwargs):
         crawl_arg = self.__crawl_checking(*args, **kwargs)
-        async with self.__fetcher.call_fetch(crawl_arg) as resp:
-            resp.data = crawl_arg
+        async with self.__fetcher.fetch(crawl_arg) as resp:
+            resp.info = crawl_arg
             yield resp
 
     async def __crawl(self, crawl_arg):
         retries = self.retries
-        status = None
         ret = None
+        # init crawl_arg
+        crawl_arg.headers = crawl_arg.headers or self.headers
+        while retries:
+            crawl_arg.proxy = crawl_arg.proxy or self.proxy_handler.get_proxy()
+            try:
+                async with self.__fetcher.fetch(crawl_arg) as resp:
+                    if not resp:
+                        pass
+                    else:
+                        if crawl_arg.read:
+                            ret = await resp.read()
+                        resp.result = ret
+                        return resp
 
-        try:
-            async with self.__fetcher.fetch(crawl_arg) as resp:
-                if not resp:
-                    pass
-                else:
-                    if crawl_arg.read:
-                        ret = await resp.read()
-                    resp.data = ret
-                    return resp
-        except Exception as e:
-            logger.exception('__crawl error:')
-            return None
+            except (aiohttp.ClientProxyConnectionError,
+                    aiohttp.ClientHttpProxyError,
+                    TimeoutError,
+                    asyncio.TimeoutError,
+                    aiohttp.ServerDisconnectedError,
+                    aiohttp.ClientOSError,
+                    aiohttp.ClientResponseError,
+                    aiohttp.ClientConnectorSSLError) as e:
+                self.proxy_handler.dead_proxy(crawl_arg.proxy)
+                logger.debug('error proxy: \n%s', pformat(crawl_arg.proxy))
+            except Exception as e:
+                self.proxy_handler.dead_proxy(crawl_arg.proxy)
+                logger.exception('__crawl error error proxy: %s', crawl_arg.proxy)
+            retries -= 1
 
     def __try_fails(self):
         if not len(self.__fails):
@@ -224,6 +242,7 @@ class Crawler:
         self.__runner.run(callback)
 
     def download(self, url, file_name, headers=None, download_part=20):
+        # todo download error
         headers = headers or self.headers
         self.crawl(url, callback=self.get_download_content, headers=headers,
                    read=False,

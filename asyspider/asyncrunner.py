@@ -2,6 +2,10 @@ import asyncio
 import logging
 import inspect
 import traceback
+import concurrent.futures
+import functools
+import time
+import datetime
 
 try:
     import uvloop
@@ -11,6 +15,15 @@ except ImportError:
     pass
 
 logger = logging.getLogger(__name__)
+
+
+def seconds_to_time(s):
+    s = int(s)
+    m = s // 60
+    h = m // 60
+    m = m - h * 60
+    s = s - m * 60 - h * 60 * 60
+    return "%02d:%02d:%02d" % (h, m, s)
 
 
 class AsyncRunner:
@@ -63,9 +76,8 @@ class AsyncRunner:
         :return:
         """
         # todo 開始時間
-        # self.start_time = now()
-        # start_at = datetime.datetime.now()
-        # logger.info('time: start:%s', start_at)
+        start_at = datetime.datetime.now()
+        logger.info('time: start:%s', start_at)
         try:
             self.__loop.run_until_complete(self.execute())
         except KeyboardInterrupt:
@@ -78,20 +90,16 @@ class AsyncRunner:
         finally:
             for task in asyncio.Task.all_tasks():
                 task.cancel()
-            if self.crawler.proxy_instance:
-                self.crawler.proxy_instance.store()
             self.crawler.on_done()
-            # todo 結束時間
-            # end_at = datetime.datetime.now()
-            # logger.info(
-            #     'time: %s crawl len: %s',
-            #     seconds_to_time((end_at - start_at).total_seconds()),
-            #     self.__total_urls
-            # )
-            # todo bot close
-            # if not self.auc.bot.closed:
-            #     if self.auc.bot._connector_owner:
-            #         self.auc.bot._connector.close()
-            #     self.auc.bot._connector = None
+            end_at = datetime.datetime.now()
+            logger.info(
+                'finish time: %s',
+                seconds_to_time((end_at - start_at).total_seconds()),
+            )
             if callback and callable(callback):
                 callback()
+
+    async def async_method(self, method, *args, **kwargs):
+        ioloop = asyncio.get_event_loop()
+        executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        return await ioloop.run_in_executor(executor, functools.partial(method, url, **bot_args))
