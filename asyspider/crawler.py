@@ -161,7 +161,10 @@ class Crawler:
         # init crawl_arg
         crawl_arg.headers = crawl_arg.headers or self.headers
         while retries:
-            crawl_arg.proxy = crawl_arg.proxy or self.proxy_handler.get_proxy()
+            if self.proxy:
+                crawl_arg.proxy = crawl_arg.proxy or self.proxy_handler.get_proxy()
+            else:
+                crawl_arg.proxy = None
             try:
                 async with self.__fetcher.fetch(crawl_arg) as resp:
                     if not resp:

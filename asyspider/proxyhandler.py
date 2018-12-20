@@ -1,7 +1,7 @@
 import os
 import json
 import random
-from .utils import *
+from asyspider.utils import *
 
 dir_path = os.path.dirname(os.path.realpath(__file__))
 
