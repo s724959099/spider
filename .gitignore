@@ -8,3 +8,9 @@
 logs
 __pycache__
 .idea
+config.py
+.DS_Store
+asyspider/.DS_Store
+sites/.DS_Store
+sites/temp/spider.py
+*/config.py

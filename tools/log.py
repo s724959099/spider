@@ -4,7 +4,10 @@ import os
 import datetime
 import logging.config
 import uuid
+import json
 import sys
+import traceback
+import io
 
 # import 這個才會有顏色
 try:
@@ -13,9 +16,25 @@ except ImportError:
     curses = None
 
 logdir = os.path.join(os.path.dirname(__file__), '../logs')
-uid = str(uuid.uuid4())[0:4]
+# 每一次啟動爬蟲都會有獨立的 logid，當爬蟲用 multiprocess 時辨識用
+logid = str(uuid.uuid4())[0:4]
 now_str = datetime.datetime.now().strftime('%Y%m%d.%H%M%S')
-logger = logging.getLogger()
+logger = logging.getLogger(__name__)
+
+
+def _final_hook(exctype, value, tb):
+    s = io.StringIO()
+    traceback.print_exception(exctype, value, tb, file=s)
+    s.write('Call stack:\n')
+    frame = tb.tb_frame
+    if frame:
+        traceback.print_stack(frame, file=s)
+    logger.error(s.getvalue())
+    s.close()
+    raise Exception
+
+
+sys.excepthook = _final_hook
 
 
 def _stderr_supports_color():
@@ -81,9 +100,9 @@ ForegroundColors = AnsiFore()
 
 
 class LogFormatter(logging.Formatter):
-    DEFAULT_FORMAT = _fmt = '%(color)s[%(levelname)s {} %(process)d %(asctime)s %(module)s:%(lineno)d]%(end_color)s %(message)s'.format(
-        uid)
-    DEFAULT_DATE_FORMAT = '%y%m%d %H:%M:%S'
+    DEFAULT_FORMAT = _fmt = '%(color)s[%(levelname)s %(asctime)s ID:{} PID:%(process)d %(name)s %(module)s:%(lineno)d]%(end_color)s %(message)s'.format(
+        logid)
+    DEFAULT_DATE_FORMAT = '%Y-%m-%d %H:%M:%S'
     DEFAULT_COLORS = {
         logging.DEBUG: ForegroundColors.CYAN,
         logging.INFO: ForegroundColors.GREEN,
@@ -135,18 +154,12 @@ class LogFormatter(logging.Formatter):
         return formatted.replace("\n", "\n    ")
 
 
-class MonoLogFormatter(LogFormatter):
-    def __init__(self, *args, **kwargs):
-        kwargs['color'] = False
-        super().__init__(*args, **kwargs)
-
-
-def gen_file(name, debug=False):
-    if debug:
+def gen_file(name, debug=False, single_file=False):
+    if debug or single_file:
         file_name = "{}.log".format(name)
         file_name = os.path.join(logdir, file_name)
     else:
-        file_name = "{}_{}_{}.log".format(name, now_str, uid)
+        file_name = "{}_{}_{}.log".format(name, now_str, logid)
         file_name = os.path.join(logdir, file_name)
     return file_name
 
@@ -160,25 +173,13 @@ def get_status_file(name):
     return file_name
 
 
-def dict_merge(dct, merge_dct):
-    for k, v in merge_dct.items():
-        if k in dct and isinstance(dct[k], dict):
-            dict_merge(dct[k], merge_dct[k])
-        else:
-            dct[k] = merge_dct[k]
-
-
-def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
-               loggers=None, maxBytes=10e9, backupCount=1, **kwargs):
+def dictConfig(name=None, level=logging.INFO, debug=False,
+               single_file=False, loggers=None, maxBytes=10e9, backupCount=1, **kwargs):
     """
-    debug
-        如果不是debug 每次執行都會產生一個log file
-    debug and loggers=None
-        預設會產生 ['eslib2', 'abike_fails', 'abike'] 三個loger 到logfile
-    config
-        更新預設的dict
+    debug/single_file
+        如果不是debug/single_file 每次執行都會產生一個log file
     name
-        file name
+        file name, 如果沒有指定時，寫到 crawler.log
     level
         預設所有loggers都是相同level
     maxBytes and backupCount
@@ -186,15 +187,12 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
         否則每次執行都會產生一個新的file 也就不需要了
     kwargs
         disable_existing_loggers
-            True 取消其他之前init的loggers
-
+            True 取消其他之前 init 的loggers
     """
     if not debug:
         maxBytes = 0
         backupCount = 0
 
-    if config is None:
-        config = {}
     disable_existing_loggers = kwargs.get('disable_existing_loggers', False)
     level_dict = {}
     for key in dir(logging):
@@ -203,13 +201,22 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
             if not callable(val):
                 level_dict[val] = key
     level_str = level_dict.get(level, 'INFO')
-    if loggers is None:
-        loggers = []
 
-    if debug or len(loggers) == 0:
-        loggers = ['eslib2', 'abike_fails', 'abike', 'request_mixin', 'debug', '']
-
-    file_name = gen_file(name, debug) if name else None
+    if name:
+        file_name = gen_file(name, debug, single_file)
+        file_handler = {
+            'filename': file_name,
+            'formatter': 'mono_color',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'maxBytes': maxBytes,
+            'backupCount': backupCount
+        }
+    else:
+        file_handler = {
+            'filename': os.path.join(logdir, 'crawler.log'),
+            'formatter': 'mono_color',
+            'class': 'logging.handlers.WatchedFileHandler'
+        }
     base_config = {
         'version': 1,
         'disable_existing_loggers': disable_existing_loggers,
@@ -218,15 +225,21 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
                 '()': LogFormatter
             },
             'mono_color': {
-                '()': MonoLogFormatter
+                'format': '[%(levelname)s %(asctime)s ID:{} PID:%(process)d %(name)s %(module)s:%(lineno)d] %(message)s'.format(logid)
             },
             'crawler_status': {
                 'format': '%(message)s'
             }
         },
         'handlers': {
+            'file_handler': file_handler,
+            'error_handler': {
+                'formatter': 'mono_color',
+                'class': 'logging.handlers.WatchedFileHandler',
+                'level': 'ERROR',
+                'filename': os.path.join(logdir, 'crawler.err')
+            },
             'stream_handler': {
-                'level': level_str,
                 'formatter': 'standard',
                 'class': 'logging.StreamHandler',
             },
@@ -234,48 +247,58 @@ def dictConfig(config=None, name=None, level=logging.INFO, debug=False,
                 'filename': get_status_file(name),
                 'level': logging.DEBUG,
                 'formatter': 'crawler_status',
-                'class': 'logging.handlers.RotatingFileHandler',
-                'maxBytes': 0,
-                'backupCount': 0,
-                "encoding": "utf8"
+                'class': 'logging.FileHandler',
             }
         },
+        'root': {
+            'handlers': ['file_handler', 'stream_handler', 'error_handler'],
+            'level': level_str
+        },
         'loggers': {
-            '': {
-                # 沒有name的不儲存
-                'handlers': [],
-                'level': level_str,
+            'requests': {
+                'level': logging.WARNING,
                 'propagate': True
             },
+            'elasticsearch': {
+                'level': logging.WARNING,
+                'propagate': True
+            },
+            'crawler_status': {
+                'handlers': ['crawler_status_handler'],
+                'level': logging.INFO,
+                'propagate': False
+            },
+            'chardet': {
+                'level': logging.WARNING,
+                'propagate': True
+            },
+            'urllib3': {
+                'level': logging.INFO,
+                'propagate': True
+            }
         }
     }
-    if file_name:
-        base_config['handlers']['rotate_file_handler'] = {
-            'filename': file_name,
-            'level': level_str,
-            'formatter': 'mono_color',
-            'class': 'logging.handlers.RotatingFileHandler',
-            'maxBytes': 10e9,
-            'backupCount': 1,
-            "encoding": "utf8"
-        }
 
-    # add other logger to same file
-    for lgr_key in loggers:
-        base_config['loggers'][lgr_key] = {
-            'handlers': ['stream_handler', 'rotate_file_handler'] if name else ['stream_handler'],
-            'level': level_str,
-            'propagate': False
-        }
-    real_config = base_config.copy()
-    # 可以單獨寫loggers 而不會覆蓋舊有的
-    dict_merge(real_config, config)
-    logging.config.dictConfig(real_config)
+    logging.config.dictConfig(base_config)
 
 
 def setup_logger(*args, **kwargs):
+    '''
+    有人用這個函式嗎？
+    '''
     pass
 
+
+def set_config(config):
+    '''
+    change log config at runtime
+    '''
+    if 'version' not in config:
+        config['version'] = 1
+    if 'disable_existing_loggers' not in config and 'incremental' not in config:
+        config['incremental'] = True
+    if config is not None:
+        logging.config.dictConfig(config)
 
 def initlog(logfile=None, logdir=None, level=logging.INFO,
             maxBytes=10e9, backupCount=1, debug=False,
@@ -283,16 +306,46 @@ def initlog(logfile=None, logdir=None, level=logging.INFO,
             ):
     """
     參考dictConfig config={...} 可以更改default init方式
+    預設會從現在工作目錄載入 log.json
+    依下列順序載入 log 設定:
+        ~/etc/log.json
+        ~/etc/log-NAME.json
+        ./log.json
+    範例：
+        {
+                "loggers": {
+                        "price_range": "DEBUG"
+                }
+        }
+    這樣就可以針對 price_range debug，卻不會噴一堆 debug 訊息
     """
     if not logdir:
-        logdir = logdir = os.path.join(os.getcwd(), 'logs')
+        logdir = os.path.join(os.environ['HOME'], 'var/log')
     if not os.path.exists(logdir):
         os.makedirs(logdir)
     dictConfig(name=logfile, level=level, debug=debug,
                maxBytes=maxBytes, backupCount=backupCount, **kwargs)
+    other_config = kwargs.get('config', None)
+    if 'config' in kwargs and kwargs['config']:
+        set_config(kwargs.get('config'))
 
+    config_orders = []
+    config_orders.append(os.path.join(os.environ['HOME'], 'etc', 'log.json'))
+    if logfile:
+        config_orders.append(os.path.join(os.environ['HOME'], 'etc', 'log-' + logfile + '.json'))
+    config_orders.append('log.json')
+
+    for f in config_orders:
+        if os.path.exists(f):
+            try:
+                with open(f) as fd:
+                    conf = json.load(fd)
+                    set_config(conf)
+            except Exception as e:
+                print(e)
 
 def getLogger(ec_type=None, provide=None, name=None):
+    print('getLogger will be removed.')
     dirname = os.path.dirname(__file__)
     logger_name = '.'.join(filter(None, [ec_type, provide, name]))
     return logging.getLogger(logger_name)
@@ -314,13 +367,10 @@ def save_sample(name, data, mode='w'):
 if __name__ == '__main__':
     """
     output:
-    level uid date time module_name file_line msg
-    [I ee39 180621 08:09:12 log:129] INFO
-    [D ee39 180621 08:09:12 log:130] DEBUG
-    [I ee39 180621 08:09:12 log:132] sub info
-    [D ee39 180621 08:09:12 log:133] sub debug
+    [level date time ID:logid   PID:pid logger module_name:line_no] msg
+    [INFO 2018-10-02 18:48:08 ID:0153 PID:16929 root log:374] test demo
     """
-    initlog('kk', level=logging.INFO, config=dict(
+    initlog('kk', level=logging.INFO,config=dict(
         loggers={
             'test': {
                 'level': logging.WARNING,
