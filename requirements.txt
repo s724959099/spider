@@ -1,0 +1,11 @@
+async-timeout==3.0.1
+certifi==2020.12.5
+chardet==4.0.0
+cssselect==1.1.0
+idna==2.10
+loguru==0.5.3
+lxml==4.6.2
+pyquery==1.4.3
+requests==2.25.1
+urllib3==1.26.2
+uvloop==0.14.0

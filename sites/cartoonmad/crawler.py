@@ -2,7 +2,7 @@ from asyspider.spider import Spider, Proxy, DBProxy
 import re
 from pyquery import PyQuery as pq
 import logging
-from tools import log
+from loguru import logger
 from pprint import pprint as pp
 import argparse
 import time
@@ -10,7 +10,6 @@ from tools.functions import get_url_query_str, url_with_query_str, try_safety, t
 from urllib.parse import urljoin
 import os
 
-logger = logging.getLogger('demo')
 HOST = 'https://www.cartoonmad.com/'
 
 
@@ -91,6 +90,5 @@ class Crawler(Spider):
 
 
 if __name__ == '__main__':
-    log.initlog('DEMO', level=logging.DEBUG, debug=True)
     c = Crawler()
     c.run()

@@ -8,7 +8,7 @@ import async_timeout
 import functools
 import time
 import hashlib
-from tinydb import TinyDB, Query
+# from tinydb import TinyDB, Query
 import random
 import os
 
@@ -17,9 +17,9 @@ try:
 except ImportError as e:
     import agent
 
-db = TinyDB(os.path.join(os.path.dirname(__file__), './db.json'))
-Proxies = db.table('Proxies')
-query = Query()
+# db = TinyDB(os.path.join(os.path.dirname(__file__), './db.json'))
+# Proxies = db.table('Proxies')
+# query = Query()
 
 try:
     import uvloop
