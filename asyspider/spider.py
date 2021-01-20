@@ -1,5 +1,4 @@
 import concurrent.futures
-import logging
 import asyncio
 import inspect
 import requests
@@ -8,28 +7,19 @@ import async_timeout
 import functools
 import time
 import hashlib
-# from tinydb import TinyDB, Query
-import random
-import os
+from loguru import logger
+import aiohttp
+import uvloop
+import re
+
+asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
 
 try:
     from . import agent
 except ImportError as e:
     import agent
 
-# db = TinyDB(os.path.join(os.path.dirname(__file__), './db.json'))
-# Proxies = db.table('Proxies')
-# query = Query()
-
-try:
-    import uvloop
-
-    asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-except ImportError:
-    pass
-
 requests.packages.urllib3.disable_warnings()
-logger = logging.getLogger('fetcher')
 
 
 class FetchBase:
@@ -51,14 +41,14 @@ class HTTPAdapter(requests.adapters.HTTPAdapter):
         r = None
         try:
             r = super().proxy_manager_for(*args, **kwargs)
-        except Exception as e:
-            logger.exeption('HTTPAdapter')
+        except Exception:
+            logger.exception('HTTPAdapter')
         self.rlock.release()
         return r
 
 
 class RequestsFetcher(FetchBase):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, **kwargs):
         self.session = requests.session()
         self.session.mount('https://', HTTPAdapter(pool_maxsize=kwargs.get('max_tasks', 40)))
         self.session.mount('http://', HTTPAdapter(pool_maxsize=kwargs.get('max_tasks', 40)))
@@ -81,7 +71,8 @@ class RequestsFetcher(FetchBase):
 
 
 class AiohttpFetcher(FetchBase):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
         if 'max_tasks' in kwargs:
             self.connector = aiohttp.TCPConnector(limit=kwargs['max_tasks'])
         else:
@@ -106,6 +97,7 @@ class AiohttpFetcher(FetchBase):
 
     def reset(self):
         self.session.detach()
+        kwargs = self.kwargs
         if 'max_tasks' in kwargs:
             self.connector = aiohttp.TCPConnector(limit=kwargs['max_tasks'])
         else:
@@ -157,29 +149,14 @@ class Proxy:
 
 
 class DBProxy(Proxy):
-    dead_proxies = []
 
     @classmethod
     def get_proxies(cls, *args, **kwargs):
-        proxies = Proxies.all()
-        http = None
-        ret = {}
-        for _i in range(50):
-            p = random.choice(proxies)
-            http = "{}:{}".format(p['ip'], p['port'])
-            if cls.dead_proxies.count(http) < 3:
-                break
-        else:
-            logger.warning('try more 50')
-        if http:
-            ret = dict(http=http, https=http)
-        return ret
+        return {}
 
     @classmethod
     def update_proxies(cls, proxies):
-        cls.dead_proxies.append(proxies.get('http', ''))
-        if len(cls.dead_proxies) > 100:
-            cls.dead_proxies.pop(0)
+        pass
 
 
 class Cookie:
@@ -203,7 +180,7 @@ class Cookie:
             for key, val in d.items():
                 self.__data_dict[key.strip()] = val.strip()
 
-    def over_cookie_length_execute(self, ret):
+    def over_cookie_length_execute(self):
         """
         default is reset
         you can overwrite it
@@ -223,7 +200,7 @@ class Cookie:
                 self.over_cookie_length_execute(ret)
                 return self.to_header(retries=retries - 1)
             else:
-                logger.warning('cookie len: %s', len(ret))
+                logger.warning(f'cookie len: {len(ret)}')
 
         return ret
 
@@ -268,7 +245,7 @@ class FetcherWrapper:
             fetch_times=0, fetch_fail_times=0, try_fetch_total=0, try_fetch_fail_total=0, total_spend_sec=0
         )
 
-    def args_preprocess(self, *args, **kwargs):
+    def args_preprocess(self, **kwargs):
         # preprocess kwargs
         if not kwargs.get('headers'):
             kwargs['headers'] = self.crawler.headers
@@ -294,18 +271,15 @@ class FetcherWrapper:
         time_start = time.time()
         r = await self.__fetch(url, method=method, *args, **kwargs)
         spend_time = time.time() - time_start
-        logger.debug('spend time: %.2f fetch %s', spend_time, url)
+        logger.debug(f'spend time: {spend_time:.2f} fetch {url}')
 
         self.infos['total_spend_sec'] += spend_time
 
         if self.infos['fetch_times'] // 100 > self.__display_fetch_times:
             self.__display_fetch_times = self.infos['fetch_times'] // 100
-            logger.info('AVG spend time: %.2f fetch_times: %s try_total: %s try_fail: %s',
-                        self.infos['total_spend_sec'] / self.infos['fetch_times'],
-                        self.infos['fetch_times'],
-                        self.infos['try_fetch_total'],
-                        self.infos['try_fetch_fail_total'],
-                        )
+            avg_time = self.infos['total_spend_sec'] / self.infos['fetch_times']
+            logger.info(
+                f'AVG spend time: {avg_time:.2f} fetch_times: {self.infos["fetch_times"]} try_total: self.infos["try_fetch_total"], try_fail: self.infos["try_fetch_fail_total"]')
         return r
 
     async def __fetch(self, url, method='GET', *args, **kwargs):
@@ -341,16 +315,15 @@ class FetcherWrapper:
                         self.cookie.update(__cookie)
                     status_code = r.status_code
                     if r.status_code not in self.crawler.status_code:
-                        logger.info('get status: %s url: %s', r.status_code, url)
+                        logger.info(f'get status: {status_code} url: {url}')
                         continue
                     content = r.result
                     if ((kwargs.get('rjson', False) or len(content) > self.crawler.min_content_length) and
                             self.crawler.fetch_check(r)):
-                        urlcontent = content
                         try_success = True
                         break
-            except Exception as inst:
-                logger.debug('try fail: %s', url)
+            except Exception:
+                logger.debug(f'try fail: {url}')
                 self.infos['try_fetch_fail_total'] += 1
                 self.crawler.ProxyClass.update_proxies(proxies)
                 if self.crawler.sleep_time:
@@ -409,7 +382,7 @@ class Spider:
 
     def fetch_check(self, r):
         """最後驗證要不要通過"""
-        return True
+        return r is not None
 
     @functools.lru_cache(maxsize=2048)
     def get_md5(self, data):
@@ -423,7 +396,7 @@ class Spider:
         else:
             return str(data)
 
-    def __crawl_checking(self, *args, **kwargs):
+    def __crawl_checking(self, **kwargs):
         """
         在crawl or asyn_crawl之前先做前處理
         判斷是否爬過
@@ -433,7 +406,7 @@ class Spider:
         params = kwargs.get('params')
         data = kwargs.get('data')
         if not url.startswith('http'):
-            logger.warning('url not start with http: %s', url)
+            logger.warning(f'url not start with http: , url')
             return False
         if kwargs.get('check_crawled_urls', self.check_crawled_urls):
             str_url = url + \
@@ -441,7 +414,7 @@ class Spider:
             md5_url = self.get_md5(str_url)
 
             if md5_url in self.crawled_urls:
-                logger.debug("repeated url: %s %s %s", url, params, data)
+                logger.debug(f"repeated url: {url} {params} {data}")
                 return False
             self.crawled_urls.add(md5_url)
         return True
@@ -476,7 +449,7 @@ class Spider:
             ret = fn(*args, **kwargs)
         return ret
 
-    async def __worker(self, i):
+    async def __worker(self, _):
         while True:
             try:
                 callback, args, kwargs = await self.queue.get()
@@ -484,7 +457,7 @@ class Spider:
                 self.queue.task_done()
             except asyncio.CancelledError:
                 break
-            except Exception as e:
+            except Exception:
                 logger.exception('work exception')
                 await self.execute_fn(self.work_exception)
                 self.queue.task_done()
@@ -492,15 +465,15 @@ class Spider:
                 pass
 
     def run(self):
-        logger.info('use task: %s', self.max_tasks)
+        logger.info(f'use task: {self.max_tasks}')
         try:
             self.loop.run_until_complete(self.__run_async_work())
         except KeyboardInterrupt:
             for task in asyncio.Task.all_tasks():
                 task.cancel()
         except asyncio.CancelledError:
-            logging.warning("cancel error")
-        except Exception as e:
+            logger.warning("cancel error")
+        except Exception:
             logger.exception('run done error')
         finally:
             self.on_end()
