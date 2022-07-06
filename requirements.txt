@@ -7,7 +7,7 @@ chardet==3.0.4
 cssselect==1.1.0
 idna==2.10
 loguru==0.5.3
-lxml==4.6.2
+lxml==4.9.1
 multidict==5.1.0
 pyquery==1.4.3
 redis==3.5.3
